@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebP → PNG Converter</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      color: #94a3b8;
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: #1e2330;
+      border: 1px solid #2d3548;
+      border-radius: 12px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 580px;
+    }
+
+    /* Drop zone */
+    #drop-zone {
+      border: 2px dashed #3b4a6b;
+      border-radius: 8px;
+      padding: 2.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+    #drop-zone.over {
+      border-color: #6366f1;
+      background: #1a1f35;
+    }
+    #drop-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+    #drop-zone .icon { font-size: 2.5rem; margin-bottom: 0.5rem; }
+    #drop-zone p { color: #94a3b8; font-size: 0.9rem; }
+    #drop-zone p strong { color: #c7d2fe; }
+
+    /* File list */
+    #file-list {
+      margin-top: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #262d40;
+      border-radius: 6px;
+      padding: 0.55rem 0.85rem;
+      font-size: 0.85rem;
+      gap: 0.5rem;
+    }
+    .file-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .file-status { font-size: 0.8rem; white-space: nowrap; }
+    .file-status.pending  { color: #64748b; }
+    .file-status.done     { color: #4ade80; }
+    .file-status.error    { color: #f87171; }
+
+    .dl-btn {
+      background: #4f46e5;
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      padding: 0.3rem 0.7rem;
+      font-size: 0.78rem;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    .dl-btn:hover { background: #4338ca; }
+
+    /* Action row */
+    .actions {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1.25rem;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 0.65rem 1rem;
+      border: none;
+      border-radius: 7px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    .btn:disabled { opacity: 0.4; cursor: default; }
+
+    .btn-primary { background: #6366f1; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #4f46e5; }
+
+    .btn-secondary { background: #2d3548; color: #c7d2fe; }
+    .btn-secondary:hover:not(:disabled) { background: #374163; }
+
+    .btn-clear { background: #3b2a2a; color: #fca5a5; }
+    .btn-clear:hover:not(:disabled) { background: #4a2f2f; }
+
+    #status-msg {
+      margin-top: 1rem;
+      font-size: 0.82rem;
+      color: #94a3b8;
+      text-align: center;
+      min-height: 1.2em;
+    }
+  </style>
+</head>
+<body>
+  <h1>WebP → PNG</h1>
+  <p class="subtitle">Convert WebP images to PNG — runs locally, nothing leaves your machine</p>
+
+  <div class="card">
+    <div id="drop-zone">
+      <input type="file" id="file-input" accept=".webp" multiple />
+      <div class="icon">🖼️</div>
+      <p><strong>Click to choose</strong> or drag &amp; drop</p>
+      <p>.webp files only · up to 50 MB total</p>
+    </div>
+
+    <div id="file-list"></div>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="convert-btn" disabled>Convert</button>
+      <button class="btn btn-secondary" id="zip-btn" disabled>Download ZIP</button>
+      <button class="btn btn-clear" id="clear-btn" disabled>Clear</button>
+    </div>
+
+    <div id="status-msg"></div>
+  </div>
+
+  <script>
+    const dropZone    = document.getElementById("drop-zone");
+    const fileInput   = document.getElementById("file-input");
+    const fileList    = document.getElementById("file-list");
+    const convertBtn  = document.getElementById("convert-btn");
+    const zipBtn      = document.getElementById("zip-btn");
+    const clearBtn    = document.getElementById("clear-btn");
+    const statusMsg   = document.getElementById("status-msg");
+
+    // state: array of { file, token, status, name }
+    let items = [];
+
+    // --- drag & drop ---
+    dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("over"); });
+    dropZone.addEventListener("dragleave", () => dropZone.classList.remove("over"));
+    dropZone.addEventListener("drop", e => {
+      e.preventDefault();
+      dropZone.classList.remove("over");
+      addFiles([...e.dataTransfer.files]);
+    });
+    fileInput.addEventListener("change", () => {
+      addFiles([...fileInput.files]);
+      fileInput.value = "";
+    });
+
+    function addFiles(files) {
+      const webps = files.filter(f => f.name.toLowerCase().endsWith(".webp"));
+      if (webps.length === 0) { setStatus("Only .webp files are accepted."); return; }
+      webps.forEach(f => items.push({ file: f, token: null, status: "pending", name: f.name }));
+      render();
+    }
+
+    function render() {
+      fileList.innerHTML = "";
+      items.forEach((item, i) => {
+        const div = document.createElement("div");
+        div.className = "file-item";
+
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "file-name";
+        nameSpan.textContent = item.name;
+
+        const statusSpan = document.createElement("span");
+        statusSpan.className = `file-status ${item.status}`;
+        statusSpan.textContent =
+          item.status === "pending" ? "Pending" :
+          item.status === "done"    ? "Converted" :
+          item.status === "error"   ? `Error: ${item.error}` : "";
+
+        div.appendChild(nameSpan);
+        div.appendChild(statusSpan);
+
+        if (item.status === "done" && item.token) {
+          const btn = document.createElement("button");
+          btn.className = "dl-btn";
+          btn.textContent = "↓ PNG";
+          btn.addEventListener("click", () => downloadOne(i));
+          div.appendChild(btn);
+        }
+
+        fileList.appendChild(div);
+      });
+
+      const hasFiles   = items.length > 0;
+      const hasPending = items.some(i => i.status === "pending");
+      const hasDone    = items.some(i => i.status === "done" && i.token);
+
+      convertBtn.disabled = !hasPending;
+      zipBtn.disabled     = !hasDone;
+      clearBtn.disabled   = !hasFiles;
+    }
+
+    function setStatus(msg) { statusMsg.textContent = msg; }
+
+    // --- convert ---
+    convertBtn.addEventListener("click", async () => {
+      const pending = items.filter(i => i.status === "pending");
+      if (!pending.length) return;
+
+      convertBtn.disabled = true;
+      setStatus("Converting…");
+
+      const fd = new FormData();
+      pending.forEach(i => fd.append("files", i.file));
+
+      try {
+        const res  = await fetch("/convert", { method: "POST", body: fd });
+        const json = await res.json();
+
+        if (json.error) { setStatus("Error: " + json.error); render(); return; }
+
+        json.results.forEach(r => {
+          const item = items.find(i => i.name === r.name);
+          if (!item) return;
+          if (r.error) {
+            item.status = "error";
+            item.error  = r.error;
+          } else {
+            item.status = "done";
+            item.token  = r.token;
+          }
+        });
+
+        const done  = items.filter(i => i.status === "done").length;
+        const total = items.length;
+        setStatus(`Done — ${done} / ${total} converted.`);
+      } catch (e) {
+        setStatus("Network error: " + e.message);
+      }
+
+      render();
+    });
+
+    // --- individual download ---
+    async function downloadOne(idx) {
+      const item = items[idx];
+      if (!item || !item.token) return;
+      const token = item.token;
+      item.token  = null;   // consumed
+      item.status = "done"; // keep label, lose button
+      render();
+      window.location = `/download/${token}`;
+    }
+
+    // --- zip download ---
+    zipBtn.addEventListener("click", async () => {
+      const ready  = items.filter(i => i.status === "done" && i.token);
+      if (!ready.length) return;
+
+      const tokens = ready.map(i => i.token);
+      ready.forEach(i => { i.token = null; });
+      render();
+
+      const res = await fetch("/download-zip", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ tokens }),
+      });
+      if (!res.ok) { setStatus("ZIP error: " + await res.text()); return; }
+
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = "converted.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatus("ZIP downloaded.");
+    });
+
+    // --- clear ---
+    clearBtn.addEventListener("click", () => {
+      items = [];
+      setStatus("");
+      render();
+    });
+  </script>
+</body>
+</html>
